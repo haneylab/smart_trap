@@ -8,7 +8,7 @@
 #define FS 8 // in Hz
 #define RISE_TIME 100 // in microseconds
 #define POWER_PIN 3
-
+#define CLOCK_ADJUST_LEARN_RATE 0.005 // > (1 - 0.005)^150 = 0.47 
 #define PHOTO_TRANSISTOR_N 4
 #define PHOTO_TRANSISTOR_PINS {0,1,2,3}
 #define LEARNING_RATE 0.01 // alpha
@@ -22,7 +22,7 @@
 const float time_to_sleep_us = 1e6 / (FS * OVER_SAMPLING) - RISE_TIME;
 
 RTC_DS1307 RTC;
-
+RTC_Millis soft_rtc;
 
 // SD chip select pin.  Be sure to disable any other SPI devices such as Enet.
 const uint8_t chipSelect = SS;
@@ -31,9 +31,31 @@ SdFile file;
 
 
 int phototransistor_array[PHOTO_TRANSISTOR_N]= {0,1,2,3};
-float rolling_mean[PHOTO_TRANSISTOR_N];
+/*float rolling_mean[PHOTO_TRANSISTOR_N];
 float rolling_sd[PHOTO_TRANSISTOR_N];
-float former_accum[PHOTO_TRANSISTOR_N];
+float former_accum[PHOTO_TRANSISTOR_N];*/
+
+unsigned long real_time_ms=0; //time since boot in ms
+float drift_avg_s=0;// the drift between the arduino milli clock and the rtc
+//
+uint32_t realTimeMs(){
+  float drift = soft_rtc.now().unixtime() - RTC.now().unixtime();
+  drift_avg_s = drift_avg_s * (1-CLOCK_ADJUST_LEARN_RATE) + CLOCK_ADJUST_LEARN_RATE * drift;
+  return millis() - drift_avg_s* 1000;
+  }
+
+
+void info(){
+  //1. print time
+  //2. print current file and line
+  //3. print serial help
+  }
+void adjustClock(){
+  //1. print current time
+  //2. parse serial data
+  //3. adjust from serial data
+  
+  }
 
 void writeHeader(){
     String header = "#";
@@ -48,9 +70,9 @@ void writeHeader(){
 }
 
 // Log a data record.
-String generateLogString(DateTime t, float x[]){
+String generateLogString(uint32_t t, float x[]){
   String out = "";
-  out += t.second();
+  out += t;
   out += ',';
   
   for(int j =0; j < PHOTO_TRANSISTOR_N ; j++){
@@ -60,7 +82,7 @@ String generateLogString(DateTime t, float x[]){
    return out;
   }
 
-void logDataSD(DateTime t, float x[]){
+void logDataSD(uint32_t t, float x[]){
   file.println(generateLogString(t, x));
   // Force data to SD and update the directory entry to avoid data loss.
   if (!file.sync() || file.getWriteError()) {
@@ -69,12 +91,15 @@ void logDataSD(DateTime t, float x[]){
 }
 
 
-void logDataSerial(DateTime t, float x[]){
+void logDataSerial(uint32_t t, float x[]){
   Serial.println(generateLogString(t, x));
 }
 
 void setup(void) {
+    
+    pinMode(POWER_PIN, OUTPUT);
     Serial.begin(57600);
+    
     RTC.begin();
     Wire.begin();
     
@@ -82,9 +107,10 @@ void setup(void) {
       Serial.println("RTC is NOT running!");
       // This will reflect the time that your sketch was compiled
       RTC.adjust(DateTime(__DATE__, __TIME__));
+      //todo stop here and do a blink loop!
     }
-    pinMode(POWER_PIN, OUTPUT);
-
+    soft_rtc.begin(RTC.now());
+    
   const uint8_t BASE_NAME_SIZE = sizeof(FILE_BASE_NAME) - 1;
   char fileName[13] = FILE_BASE_NAME "0000.csv";
 
@@ -146,9 +172,9 @@ void loop(void) {
     for(int j =0; j < PHOTO_TRANSISTOR_N ; j++){
       accum[j] /= OVER_SAMPLING;
      }
- 
-    DateTime now = RTC.now(); 
-    
+    uint32_t now = realTimeMs();
+    logDataSD(now, accum);
+    logDataSerial(now, accum);
 /*
     float delt_accum = accum -former_accum;
     rolling_mean = rolling_mean * (1.0 -LEARNING_RATE) + LEARNING_RATE *delt_accum;
@@ -160,32 +186,6 @@ void loop(void) {
     if(z_score > Z_SCORE_THRESHOLD){
       crossing = true;
       }*/
-    logDataSD(now, accum);
-    logDataSerial(now, accum);
     
 
-    /*
-    Serial.print(now.year(), DEC);
-    Serial.print('-');
-    Serial.print(now.month(), DEC);
-    Serial.print('-');
-    Serial.print(now.day(), DEC);
-    Serial.print(' ');
-    Serial.print(now.hour(), DEC);
-    Serial.print(':');
-    Serial.print(now.minute(), DEC);
-    Serial.print(':');
-    Serial.print(now.second(), DEC);
-    Serial.print('|');
-    Serial.print(accum);
-    Serial.print('|');
-    Serial.print(delt_accum);
-    Serial.print('|');
-    Serial.print(rolling_mean);
-    Serial.print('|');
-    Serial.print(rolling_sd);
-    Serial.print('|');
-    Serial.println(crossing);
-    
-*/
 }
