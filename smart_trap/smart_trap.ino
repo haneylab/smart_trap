@@ -3,7 +3,7 @@
 #include <SPI.h>
 #include <SdFat.h>
 //#include <sdios.h>
-//
+
 #define OVER_SAMPLING 64
 #define FS 8 // in Hz
 #define RISE_TIME 100 // in microseconds
@@ -57,16 +57,13 @@ void adjustClock(){
   
   }
 
-void writeHeader(){
+String generateHeader(RTC_DS1307 rtc){
     String header = "#";
-    DateTime now = RTC.now(); 
+    DateTime now = rtc.now();
     char datetime[17];
     sprintf (datetime, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
     header += datetime;
-    
-    file.print(header);
-    Serial.println(header);
-  //chip UID, date time,... gps?
+    return header;
 }
 
 // Log a data record.
@@ -82,8 +79,15 @@ String generateLogString(uint32_t t, float x[]){
    return out;
   }
 
-void logDataSD(uint32_t t, float x[]){
-  file.println(generateLogString(t, x));
+//Write a string to both to file and Serial
+void log(String string, SdFile f){
+    logSerial(string);
+    logSD(string, file);
+}
+
+
+void logSD(String string, SdFile f){
+  file.println(string);
   // Force data to SD and update the directory entry to avoid data loss.
   if (!file.sync() || file.getWriteError()) {
     error("write error");
@@ -91,15 +95,14 @@ void logDataSD(uint32_t t, float x[]){
 }
 
 
-void logDataSerial(uint32_t t, float x[]){
-  Serial.println(generateLogString(t, x));
+void logSerial(String string){
+  Serial.println(string);
 }
 
+
 void setup(void) {
-    
-    pinMode(POWER_PIN, OUTPUT);
     Serial.begin(57600);
-    
+    pinMode(POWER_PIN, OUTPUT);
     RTC.begin();
     Wire.begin();
     
@@ -109,11 +112,8 @@ void setup(void) {
       RTC.adjust(DateTime(__DATE__, __TIME__));
       //todo stop here and do a blink loop!
     }
-    soft_rtc.begin(RTC.now());
-    
-  const uint8_t BASE_NAME_SIZE = sizeof(FILE_BASE_NAME) - 1;
-  char fileName[13] = FILE_BASE_NAME "0000.csv";
 
+    soft_rtc.begin(RTC.now());
 
   // Initialize at the highest speed supported by the board that is
   // not over 50 MHz. Try a lower speed if SPI errors occur.
@@ -121,12 +121,15 @@ void setup(void) {
     sd.initErrorHalt();
   }
 
+
+  const uint8_t BASE_NAME_SIZE = sizeof(FILE_BASE_NAME) - 1;
+  char fileName[13] = FILE_BASE_NAME "0000.csv";
+
   // Find an unused file name.
   if (BASE_NAME_SIZE > 2) {
     error("FILE_BASE_NAME too long");
   }
- 
-  
+
   while (sd.exists(fileName)) {
     if (fileName[BASE_NAME_SIZE + 3] != '9') {
       fileName[BASE_NAME_SIZE + 3]++;
@@ -146,8 +149,8 @@ void setup(void) {
   if (!file.open(fileName, O_WRONLY | O_CREAT | O_EXCL)) {
     error("file.open");
   }
-  writeHeader();
-  
+
+  log(generateHeader(RTC), file);
 }
 
 void loop(void) {
@@ -173,8 +176,8 @@ void loop(void) {
       accum[j] /= OVER_SAMPLING;
      }
     uint32_t now = realTimeMs();
-    logDataSD(now, accum);
-    logDataSerial(now, accum);
+    log(generateLogString(now, accum), file);
+
 /*
     float delt_accum = accum -former_accum;
     rolling_mean = rolling_mean * (1.0 -LEARNING_RATE) + LEARNING_RATE *delt_accum;
@@ -189,3 +192,6 @@ void loop(void) {
     
 
 }
+
+
+// arduino-cli  compile --fqbn  arduino:avr:uno  smart_trap.ino
