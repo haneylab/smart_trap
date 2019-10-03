@@ -54,7 +54,6 @@ def plot(screen, time_queue, value_queue, window_size):
     t = np.array(list(time_queue))
     # y values
     values = np.array(list(value_queue), dtype=np.float32)
-
     # We scale the signal so that all values lie between 0 and 1
 
     new_y = values - np.min(values,0)
@@ -176,7 +175,7 @@ if __name__ == "__main__":
     serial_port = serial.Serial(port, baud, timeout=2)
     
     # We start a timer using the real time from the operating system
-    start = time.time()
+    start = 0
     
     # Then we make two queues (FIFO containers); one for the values and one for the time stamps
     time_queue, value_queue = deque(), deque()
@@ -187,7 +186,7 @@ if __name__ == "__main__":
     # We build the pygame window before we can start painting inside
     display = pygame.display.set_mode((DISPLAY_WIDTH, DISPLAY_HEIGHT))
     # Let us set the window name as well
-    pygame.display.set_caption('Snail Heart Rate Monitor')
+    pygame.display.set_caption('Smart trap Monitor')
     
     # The `with statement` will ensure the file is closed properly, should any exception happen
     with open(out_file, "w") as f:
@@ -199,20 +198,24 @@ if __name__ == "__main__":
             while True:
                 # we read a line from serial port and remove any `\r` and `\n` character
                 line = serial_port.readline().rstrip()
-                print(line)
-                continue
+                if line.startswith(b"#"):
+                    print(line)
+                    continue
                 # Just after, we get a time stamp
-                now = time.time()
+                #now = time.time()
                 # we try to convert the line to an integer value
                 try:
-                    values = [float(v) for v in line.split(b',')]
-                    # value = float(line)
+                    values = [float(v) for v in line.split(b',') if v]
+                   # value = float(line)
 
+                    now = float(values.pop(0)) / 1e3
                 # If something goes wrong, we do not stop, but we print the error message
                 except ValueError as e:
                     print(e)
                     continue
-
+                except IndexError as e:
+                    print(e)
+                    continue
                 # The relative time from the start of the program is `dt`
                 dt = now - start
 
@@ -224,9 +227,10 @@ if __name__ == "__main__":
                 value_queue.append(values)
 
                 # We wait to have at least five points AND three seconds of data
+                print((now, values))
                 if time_queue[-1] < 3 or len(time_queue) < 5:
                     continue
-
+                print((now, values))
                 # Now, we remove/forget from the queues any value older than the window size
                 # This way. we will only plot the last n (default 20) seconds of data
                 while time_queue[-1] - time_queue[0] > window_size:
