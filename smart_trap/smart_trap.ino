@@ -4,6 +4,7 @@
 #include <SdFat.h>
 //#include <sdios.h>
 
+#define BAUD_RATE 57600
 #define OVER_SAMPLING 64
 #define FS 8 // in Hz
 #define RISE_TIME 100 // in microseconds
@@ -13,6 +14,8 @@
 #define PHOTO_TRANSISTOR_PINS {0,1,2,3}
 #define LEARNING_RATE 0.01 // alpha
 #define Z_SCORE_THRESHOLD 4.753424 //R> qnorm(1 - 10^(-6),0,1)
+#define ERROR_LED 9
+#define METADATA_FILENAME "meta.txt"
 
 #define error(msg) sd.errorHalt(F(msg))
 
@@ -28,6 +31,7 @@ RTC_Millis soft_rtc;
 const uint8_t chipSelect = SS;
 SdFat sd;
 SdFile file;
+SdFile metadata_file;
 
 
 int phototransistor_array[PHOTO_TRANSISTOR_N]= {0,1,2,3};
@@ -39,8 +43,17 @@ unsigned long real_time_ms=0; //time since boot in ms
 float drift_avg_s=0;// the drift between the arduino milli clock and the rtc
 //
 uint32_t realTimeMs(){
-  float drift = soft_rtc.now().unixtime() - RTC.now().unixtime();
-  drift_avg_s = drift_avg_s * (1-CLOCK_ADJUST_LEARN_RATE) + CLOCK_ADJUST_LEARN_RATE * drift;
+  uint32_t soft_now = soft_rtc.now().unixtime();
+  uint32_t hard_now = RTC.now().unixtime();
+
+  int drift = 0;
+  if(soft_now < hard_now)
+      drift = soft_now - hard_now;
+  else
+      drift = - (int) (hard_now - soft_now );
+
+  drift_avg_s = drift_avg_s * (1-CLOCK_ADJUST_LEARN_RATE) + CLOCK_ADJUST_LEARN_RATE * (float) drift;
+
   return millis() - drift_avg_s* 1000;
   }
 
@@ -57,12 +70,14 @@ void adjustClock(){
   
   }
 
-String generateHeader(RTC_DS1307 rtc){
+String generateHeader(RTC_DS1307 rtc, String device_id){
     String header = "#";
     DateTime now = rtc.now();
     char datetime[17];
     sprintf (datetime, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
     header += datetime;
+    header += ",";
+    header += device_id;
     return header;
 }
 
@@ -89,7 +104,8 @@ void log(String string, SdFile f){
 void logSD(String string, SdFile f){
   file.println(string);
   // Force data to SD and update the directory entry to avoid data loss.
-  if (!file.sync() || file.getWriteError()) {
+
+  if (file.isOpen() && (!file.sync() || file.getWriteError())) {
     error("write error");
   }
 }
@@ -99,36 +115,41 @@ void logSerial(String string){
   Serial.println(string);
 }
 
-
-void setup(void) {
-    Serial.begin(57600);
-    pinMode(POWER_PIN, OUTPUT);
-    RTC.begin();
-    Wire.begin();
-    
-    if (! RTC.isrunning()) {
-      Serial.println("RTC is NOT running!");
-      // This will reflect the time that your sketch was compiled
-      RTC.adjust(DateTime(__DATE__, __TIME__));
-      //todo stop here and do a blink loop!
+void fatalError(String message, char status, SdFile file){
+    log(message, file);
+    unsigned int i = 0;
+    while(true){
+        if(i %10 < status){
+           digitalWrite(ERROR_LED, HIGH);
+        }
+        delay(10);
+        digitalWrite(ERROR_LED, LOW);
+        delay(490);
+        i++;
     }
-
-    soft_rtc.begin(RTC.now());
+}
+void setup(void) {
+    Serial.begin(BAUD_RATE);
+    pinMode(POWER_PIN, OUTPUT);
+    pinMode(ERROR_LED, OUTPUT);
 
   // Initialize at the highest speed supported by the board that is
   // not over 50 MHz. Try a lower speed if SPI errors occur.
   if (!sd.begin(chipSelect, SD_SCK_MHZ(50))) {
-    sd.initErrorHalt();
+       fatalError("Cannot connect to sd card reader", 1, file);
   }
 
+   if(!metadata_file.open(METADATA_FILENAME, O_READ)){
+      fatalError("No metadata file", 2, file);
+   }
+  String device_id = "---";
+  for(int i; i != 3; ++i){
+    device_id[i] = metadata_file.read();
+  }
+  metadata_file.close();
 
   const uint8_t BASE_NAME_SIZE = sizeof(FILE_BASE_NAME) - 1;
   char fileName[13] = FILE_BASE_NAME "0000.csv";
-
-  // Find an unused file name.
-  if (BASE_NAME_SIZE > 2) {
-    error("FILE_BASE_NAME too long");
-  }
 
   while (sd.exists(fileName)) {
     if (fileName[BASE_NAME_SIZE + 3] != '9') {
@@ -143,15 +164,28 @@ void setup(void) {
       fileName[BASE_NAME_SIZE + 1] = '0';
       fileName[BASE_NAME_SIZE]++;
     } else {
-      error("Can't create file name");
+      fatalError("Cannot create filename", 3, file);
     }
   }
   if (!file.open(fileName, O_WRONLY | O_CREAT | O_EXCL)) {
-    error("file.open");
+     fatalError("Cannot open file", 3, file);
   }
 
-  log(generateHeader(RTC), file);
+    RTC.begin();
+    Wire.begin();
+
+    if (! RTC.isrunning()) {
+      Serial.println("RTC is NOT running!");
+       //fixme use external env variables so we set to UTC?
+      RTC.adjust(DateTime(__DATE__, __TIME__));
+      fatalError("No clock", 3, file);
+    }
+
+    soft_rtc.begin(RTC.now());
+
+  log(generateHeader(RTC, device_id), file);
 }
+
 
 void loop(void) {
   //todo check for instructions e.g. set rtc with serial
