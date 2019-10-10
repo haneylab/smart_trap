@@ -2,6 +2,8 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <SdFat.h>
+#include <SerialCommands.h>
+
 //#include <sdios.h>
 
 #define BAUD_RATE 57600
@@ -32,6 +34,7 @@ const uint8_t chipSelect = SS;
 SdFat sd;
 SdFile file;
 SdFile metadata_file;
+String header = "#";
 
 
 int phototransistor_array[PHOTO_TRANSISTOR_N]= {0,1,2,3};
@@ -41,7 +44,40 @@ float former_accum[PHOTO_TRANSISTOR_N];*/
 
 unsigned long real_time_ms=0; //time since boot in ms
 float drift_avg_s=0;// the drift between the arduino milli clock and the rtc
-//
+
+
+char serial_command_buffer_[32];
+SerialCommands serial_commands_(&Serial, serial_command_buffer_, sizeof(serial_command_buffer_), "\r\n", " ");
+
+//This is the default handler, and gets called when no other command matches. 
+// Note: It does not get called for one_key commands that do not match
+void cmd_unrecognized(SerialCommands* sender, const char* cmd)
+{
+  sender->GetSerial()->print("Unrecognized command [");
+  sender->GetSerial()->print(cmd);
+  sender->GetSerial()->println("]");
+}
+
+void cmd_set_datetime(SerialCommands* sender)
+{
+	char* datetime = sender->Next();
+	if (datetime == NULL)
+	{
+		sender->GetSerial()->println("#ERROR NO_DATETIME!");
+		return;
+	}	
+	adjustClock(datetime);
+}
+
+
+void cmd_info(SerialCommands* sender)
+{
+	String message = "#*";
+	message += "header: " + header + "|";
+	sender->GetSerial()->println(message);
+		
+}
+
 uint32_t realTimeMs(){
   uint32_t soft_now = soft_rtc.now().unixtime();
   uint32_t hard_now = RTC.now().unixtime();
@@ -63,15 +99,50 @@ void info(){
   //2. print current file and line
   //3. print serial help
   }
-void adjustClock(){
-  //1. print current time
-  //2. parse serial data
-  //3. adjust from serial data
-  
+void adjustClock(char* datetime){
+	info();
+	uint32_t unixtime = atoi(datetime);
+	RTC.adjust(DateTime(unixtime));  
+	delay(500);
+	info();
   }
+ 
+  
+void initOutputFile(SdFat *sd, SdFile *file){
+    const uint8_t BASE_NAME_SIZE = sizeof(FILE_BASE_NAME) - 1;
+    char fileName[13] = FILE_BASE_NAME "0000.csv";
+
+    while (sd->exists(fileName)) {
+        if (fileName[BASE_NAME_SIZE + 3] != '9') {
+          fileName[BASE_NAME_SIZE + 3]++;
+        } else if (fileName[BASE_NAME_SIZE + 2] != '9') {
+          fileName[BASE_NAME_SIZE + 3] = '0';
+          fileName[BASE_NAME_SIZE + 2]++;
+        } else if (fileName[BASE_NAME_SIZE + 1] != '9') {
+          fileName[BASE_NAME_SIZE + 2] = '0';
+          fileName[BASE_NAME_SIZE + 1]++;
+        } else if (fileName[BASE_NAME_SIZE] != '9') {
+          fileName[BASE_NAME_SIZE + 1] = '0';
+          fileName[BASE_NAME_SIZE]++;
+        } else {
+          fatalError("Cannot create filename", 3, *file);
+        }
+      }
+  if (!file->open(fileName, O_WRONLY | O_CREAT | O_EXCL)) {
+     fatalError("Cannot open file", 3, *file);
+  }
+}
+
+void initTime(RTC_DS1307 *RTC, RTC_Millis *soft_rtc){
+    RTC->begin();
+    Wire.begin();
+    if (!RTC->isrunning()) {
+      fatalError("No clock", 3, file);
+    }
+    soft_rtc->begin(RTC->now());
+}
 
 String generateHeader(RTC_DS1307 rtc, String device_id){
-    String header = "#";
     DateTime now = rtc.now();
     char datetime[17];
     sprintf (datetime, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
@@ -132,6 +203,9 @@ void setup(void) {
     Serial.begin(BAUD_RATE);
     pinMode(POWER_PIN, OUTPUT);
     pinMode(ERROR_LED, OUTPUT);
+    digitalWrite(ERROR_LED, HIGH);
+    delay(1000);
+    digitalWrite(ERROR_LED, LOW);
 
   // Initialize at the highest speed supported by the board that is
   // not over 50 MHz. Try a lower speed if SPI errors occur.
@@ -139,51 +213,19 @@ void setup(void) {
        fatalError("Cannot connect to sd card reader", 1, file);
   }
 
-   if(!metadata_file.open(METADATA_FILENAME, O_READ)){
+    if(!metadata_file.open(METADATA_FILENAME, O_READ)){
       fatalError("No metadata file", 2, file);
-   }
-  String device_id = "---";
-  for(int i; i != 3; ++i){
-    device_id[i] = metadata_file.read();
-  }
-  metadata_file.close();
-
-  const uint8_t BASE_NAME_SIZE = sizeof(FILE_BASE_NAME) - 1;
-  char fileName[13] = FILE_BASE_NAME "0000.csv";
-
-  while (sd.exists(fileName)) {
-    if (fileName[BASE_NAME_SIZE + 3] != '9') {
-      fileName[BASE_NAME_SIZE + 3]++;
-    } else if (fileName[BASE_NAME_SIZE + 2] != '9') {
-      fileName[BASE_NAME_SIZE + 3] = '0';
-      fileName[BASE_NAME_SIZE + 2]++;
-    } else if (fileName[BASE_NAME_SIZE + 1] != '9') {
-      fileName[BASE_NAME_SIZE + 2] = '0';
-      fileName[BASE_NAME_SIZE + 1]++;
-    } else if (fileName[BASE_NAME_SIZE] != '9') {
-      fileName[BASE_NAME_SIZE + 1] = '0';
-      fileName[BASE_NAME_SIZE]++;
-    } else {
-      fatalError("Cannot create filename", 3, file);
-    }
-  }
-  if (!file.open(fileName, O_WRONLY | O_CREAT | O_EXCL)) {
-     fatalError("Cannot open file", 3, file);
-  }
-
-    RTC.begin();
-    Wire.begin();
-
-    if (! RTC.isrunning()) {
-      Serial.println("RTC is NOT running!");
-       //fixme use external env variables so we set to UTC?
-      RTC.adjust(DateTime(__DATE__, __TIME__));
-      fatalError("No clock", 3, file);
     }
 
-    soft_rtc.begin(RTC.now());
+    String device_id = "";
+    for(int i=0; i != 3; ++i){
+        device_id += (char) metadata_file.read();
+    }
+    metadata_file.close();
 
-  log(generateHeader(RTC, device_id), file);
+    initOutputFile(&sd, &file);
+    initTime(&RTC, &soft_rtc);
+    log(generateHeader(RTC, device_id), file);
 }
 
 
@@ -226,6 +268,3 @@ void loop(void) {
     
 
 }
-
-
-// arduino-cli  compile --fqbn  arduino:avr:uno  smart_trap.ino
