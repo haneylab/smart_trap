@@ -35,7 +35,8 @@ SdFat sd;
 SdFile file;
 SdFile metadata_file;
 String header = "#";
-
+String device_id = "";
+bool started = false;
 
 int phototransistor_array[PHOTO_TRANSISTOR_N]= {0,1,2,3};
 /*float rolling_mean[PHOTO_TRANSISTOR_N];
@@ -51,27 +52,37 @@ SerialCommands serial_commands_(&Serial, serial_command_buffer_, sizeof(serial_c
 
 //This is the default handler, and gets called when no other command matches. 
 // Note: It does not get called for one_key commands that do not match
-void cmd_unrecognized(SerialCommands* sender, const char* cmd)
-{
+void cmd_unrecognized(SerialCommands* sender, const char* cmd){
   sender->GetSerial()->print("Unrecognized command [");
   sender->GetSerial()->print(cmd);
   sender->GetSerial()->println("]");
 }
 
-void cmd_set_datetime(SerialCommands* sender)
-{
+void cmd_set_datetime(SerialCommands* sender){
 	char* datetime = sender->Next();
-	if (datetime == NULL)
-	{
+	DateTime now = RTC.now();
+    char datetime_old[17];
+    sprintf (datetime_old, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
+
+	if (datetime == NULL){
 		sender->GetSerial()->println("#ERROR NO_DATETIME!");
 		return;
 	}	
+// 	adjustClock("1571052604");
 	adjustClock(datetime);
+    now = RTC.now();
+    char datetime_new[17];
+    sprintf (datetime_new, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
+
+
+	String message = "#* Old time:" + String(datetime_old);
+    message += " | New time:" + String(datetime_new);
+	sender->GetSerial()->println(message);
+
 }
 
 
-void cmd_info(SerialCommands* sender)
-{
+void cmd_get_info(SerialCommands* sender){
 	String message = "#*";
 	message += "header: " + header + "|";
 	sender->GetSerial()->println(message);
@@ -100,11 +111,11 @@ void info(){
   //3. print serial help
   }
 void adjustClock(char* datetime){
-	info();
-	uint32_t unixtime = atoi(datetime);
-	RTC.adjust(DateTime(unixtime));  
+	//info();
+	uint32_t unixtime = 946684800 + (uint32_t) atol(datetime);
+	RTC.adjust(DateTime(unixtime));
 	delay(500);
-	info();
+	//info();
   }
  
   
@@ -143,6 +154,7 @@ void initTime(RTC_DS1307 *RTC, RTC_Millis *soft_rtc){
 }
 
 String generateHeader(RTC_DS1307 rtc, String device_id){
+    header = "#";
     DateTime now = rtc.now();
     char datetime[17];
     sprintf (datetime, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
@@ -199,6 +211,11 @@ void fatalError(String message, char status, SdFile file){
         i++;
     }
 }
+
+
+SerialCommand cmd_set_datetime_("sdt", cmd_set_datetime);
+SerialCommand cmd_get_info_("gi", cmd_get_info);
+
 void setup(void) {
     Serial.begin(BAUD_RATE);
     pinMode(POWER_PIN, OUTPUT);
@@ -207,17 +224,20 @@ void setup(void) {
     delay(1000);
     digitalWrite(ERROR_LED, LOW);
 
+
+	serial_commands_.SetDefaultHandler(cmd_unrecognized);
+	serial_commands_.AddCommand(&cmd_set_datetime_);
+	serial_commands_.AddCommand(&cmd_get_info_);
+
   // Initialize at the highest speed supported by the board that is
   // not over 50 MHz. Try a lower speed if SPI errors occur.
   if (!sd.begin(chipSelect, SD_SCK_MHZ(50))) {
        fatalError("Cannot connect to sd card reader", 1, file);
   }
-
     if(!metadata_file.open(METADATA_FILENAME, O_READ)){
       fatalError("No metadata file", 2, file);
     }
 
-    String device_id = "";
     for(int i=0; i != 3; ++i){
         device_id += (char) metadata_file.read();
     }
@@ -225,12 +245,16 @@ void setup(void) {
 
     initOutputFile(&sd, &file);
     initTime(&RTC, &soft_rtc);
-    log(generateHeader(RTC, device_id), file);
 }
 
 
 void loop(void) {
   //todo check for instructions e.g. set rtc with serial
+
+	serial_commands_.ReadSerial();
+	if(!started){
+//         log(generateHeader(RTC, device_id), file);
+	}
     float accum[PHOTO_TRANSISTOR_N];
     for(int j =0; j < PHOTO_TRANSISTOR_N ; j++){
       accum[j] = 0;
@@ -252,7 +276,7 @@ void loop(void) {
       accum[j] /= OVER_SAMPLING;
      }
     uint32_t now = realTimeMs();
-    log(generateLogString(now, accum), file);
+//     log(generateLogString(now, accum), file);
 
 /*
     float delt_accum = accum -former_accum;
@@ -266,5 +290,5 @@ void loop(void) {
       crossing = true;
       }*/
     
-
+    started = true;
 }

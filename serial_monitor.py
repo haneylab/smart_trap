@@ -144,10 +144,11 @@ def serial_ports():
 
 if __name__ == "__main__":
     
-    
+    program_start = time.time()
     # parsing command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', help='port', type=str, default=None)
+    parser.add_argument('--set-datetime', help='Set the datetime in the arduino RTC', type=int, default=program_start)
     parser.add_argument('--vws', help='The duration of the viewing window (s)', type=int, default=20)
     parser.add_argument('--out', help='An optional output file', type=str, default=os.devnull)
     parser.add_argument('--baud', help='The baud rate of the serial port', type=int, default=57600)
@@ -157,6 +158,8 @@ if __name__ == "__main__":
     window_size = arg_dict["vws"]
     out_file = arg_dict["out"]
     baud = arg_dict["baud"]
+    print(arg_dict)
+    set_datetime = arg_dict["set_datetime"]
 
     # Here we open the serial port
     port = arg_dict["port"]
@@ -173,7 +176,16 @@ if __name__ == "__main__":
 
 
     serial_port = serial.Serial(port, baud, timeout=2)
-    
+    # while serial_port.readline().rstrip() == "":
+    #     time.sleep(1)
+    #     print("Waiting for loop")
+    time.sleep(5)
+    if set_datetime:
+        warm_up_lag = time.time() - program_start
+        real_time_to_set = round(set_datetime + warm_up_lag) - 946684800
+        serial_port.write(b"sdt %i\r\n" % real_time_to_set)
+        #print("Set time: %s" % serial_port.readline().rstrip())
+
     # We start a timer using the real time from the operating system
     start = 0
     
@@ -198,10 +210,10 @@ if __name__ == "__main__":
             while True:
                 # we read a line from serial port and remove any `\r` and `\n` character
                 line = serial_port.readline().rstrip()
-                if line.startswith(b"#"):
-                    print(line)
-                    continue
-                # Just after, we get a time stamp
+                # if line.startswith(b"#"):
+                print(line)
+                continue
+            # Just after, we get a time stamp
                 #now = time.time()
                 # we try to convert the line to an integer value
                 try:
