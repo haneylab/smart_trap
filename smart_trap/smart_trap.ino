@@ -7,9 +7,9 @@
 //#include <sdios.h>
 
 #define BAUD_RATE 57600
-#define OVER_SAMPLING 64
+#define OVER_SAMPLING 32
 #define FS 8 // in Hz
-#define RISE_TIME 100 // in microseconds
+#define RISE_TIME 50 // in microseconds
 #define POWER_PIN 3
 #define CLOCK_ADJUST_LEARN_RATE 0.005 // > (1 - 0.005)^150 = 0.47 
 #define PHOTO_TRANSISTOR_N 4
@@ -45,10 +45,7 @@ float former_accum[PHOTO_TRANSISTOR_N];*/
 
 unsigned long real_time_ms=0; //time since boot in ms
 float drift_avg_s=0;// the drift between the arduino milli clock and the rtc
-
-
 char serial_command_buffer_[32];
-SerialCommands serial_commands_(&Serial, serial_command_buffer_, sizeof(serial_command_buffer_), "\r\n", " ");
 
 //This is the default handler, and gets called when no other command matches. 
 // Note: It does not get called for one_key commands that do not match
@@ -81,7 +78,6 @@ void cmd_set_datetime(SerialCommands* sender){
 
 }
 
-
 void cmd_get_info(SerialCommands* sender){
 	String message = "#*";
 	message += "header: " + header + "|";
@@ -104,12 +100,12 @@ uint32_t realTimeMs(){
   return millis() - drift_avg_s* 1000;
   }
 
-
 void info(){
   //1. print time
   //2. print current file and line
   //3. print serial help
   }
+  
 void adjustClock(char* datetime){
 	//info();
 	uint32_t unixtime = 946684800 + (uint32_t) atol(datetime);
@@ -117,8 +113,7 @@ void adjustClock(char* datetime){
 	delay(500);
 	//info();
   }
- 
-  
+   
 void initOutputFile(SdFat *sd, SdFile *file){
     const uint8_t BASE_NAME_SIZE = sizeof(FILE_BASE_NAME) - 1;
     char fileName[13] = FILE_BASE_NAME "0000.csv";
@@ -145,11 +140,14 @@ void initOutputFile(SdFat *sd, SdFile *file){
 }
 
 void initTime(RTC_DS1307 *RTC, RTC_Millis *soft_rtc){
-    RTC->begin();
+    
     Wire.begin();
-    if (!RTC->isrunning()) {
-      fatalError("No clock", 3, file);
+    if (!RTC->begin()) {
+      fatalError("No clock", 4, file);
     }
+    
+    //~ RTC->isrunning()
+    // todo if year >2050 fail!
     soft_rtc->begin(RTC->now());
 }
 
@@ -183,7 +181,6 @@ void log(String string, SdFile f){
     logSD(string, file);
 }
 
-
 void logSD(String string, SdFile f){
   file.println(string);
   // Force data to SD and update the directory entry to avoid data loss.
@@ -192,7 +189,6 @@ void logSD(String string, SdFile f){
     error("write error");
   }
 }
-
 
 void logSerial(String string){
   Serial.println(string);
@@ -212,9 +208,10 @@ void fatalError(String message, char status, SdFile file){
     }
 }
 
-
+SerialCommands serial_commands_(&Serial, serial_command_buffer_, sizeof(serial_command_buffer_), "\r\n", " ");
 SerialCommand cmd_set_datetime_("sdt", cmd_set_datetime);
 SerialCommand cmd_get_info_("gi", cmd_get_info);
+
 
 void setup(void) {
     Serial.begin(BAUD_RATE);
@@ -245,16 +242,14 @@ void setup(void) {
 
     initOutputFile(&sd, &file);
     initTime(&RTC, &soft_rtc);
+    log(generateHeader(RTC, device_id),file);
 }
 
 
 void loop(void) {
-  //todo check for instructions e.g. set rtc with serial
 
 	serial_commands_.ReadSerial();
-	if(!started){
-//         log(generateHeader(RTC, device_id), file);
-	}
+	
     float accum[PHOTO_TRANSISTOR_N];
     for(int j =0; j < PHOTO_TRANSISTOR_N ; j++){
       accum[j] = 0;
@@ -276,7 +271,7 @@ void loop(void) {
       accum[j] /= OVER_SAMPLING;
      }
     uint32_t now = realTimeMs();
-//     log(generateLogString(now, accum), file);
+    log(generateLogString(now, accum), file);
 
 /*
     float delt_accum = accum -former_accum;
@@ -290,5 +285,4 @@ void loop(void) {
       crossing = true;
       }*/
     
-    started = true;
 }

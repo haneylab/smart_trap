@@ -1,5 +1,5 @@
-FQBN := arduino:avr:uno
-PORT := /dev/ttyACM0
+FQBN := arduino:avr:nano:cpu=atmega328
+PORT := /dev/ttyUSB0
 SKETCH_NAME := smart_trap
 
 SUFFIX := $(subst :,.,$(FQBN))
@@ -12,6 +12,9 @@ $(ELF_FILE) : $(SKETCH_NAME)/$(SKETCH_NAME).ino
 
 upload: compile
 	arduino-cli  upload -p $(PORT)  --fqbn  $(FQBN)  $(SKETCH_NAME) -v
+	
+set_time: 
+
 
 monitor: 
 	python serial_monitor.py  --port $(PORT)

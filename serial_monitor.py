@@ -211,8 +211,8 @@ if __name__ == "__main__":
                 # we read a line from serial port and remove any `\r` and `\n` character
                 line = serial_port.readline().rstrip()
                 # if line.startswith(b"#"):
-                print(line)
-                continue
+                # print(line)
+                # continue
             # Just after, we get a time stamp
                 #now = time.time()
                 # we try to convert the line to an integer value
