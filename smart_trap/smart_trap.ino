@@ -6,6 +6,7 @@
 
 //#include <sdios.h>
 
+#define SKIP_FATAL 
 #define BAUD_RATE 57600
 #define OVER_SAMPLING 32
 #define FS 8 // in Hz
@@ -18,6 +19,7 @@
 #define Z_SCORE_THRESHOLD 4.753424 //R> qnorm(1 - 10^(-6),0,1)
 #define ERROR_LED 9
 #define METADATA_FILENAME "meta.txt"
+
 
 #define error(msg) sd.errorHalt(F(msg))
 
@@ -205,6 +207,9 @@ void fatalError(String message, char status, SdFile file){
         digitalWrite(ERROR_LED, LOW);
         delay(490);
         i++;
+#ifdef SKIP_FATAL 
+		return ;
+#endif
     }
 }
 
@@ -228,19 +233,22 @@ void setup(void) {
 
   // Initialize at the highest speed supported by the board that is
   // not over 50 MHz. Try a lower speed if SPI errors occur.
-  if (!sd.begin(chipSelect, SD_SCK_MHZ(50))) {
+	bool sd_ok = sd.begin(chipSelect, SD_SCK_MHZ(50));
+	if (!sd_ok) {
        fatalError("Cannot connect to sd card reader", 1, file);
-  }
-    if(!metadata_file.open(METADATA_FILENAME, O_READ)){
-      fatalError("No metadata file", 2, file);
-    }
-
-    for(int i=0; i != 3; ++i){
-        device_id += (char) metadata_file.read();
-    }
-    metadata_file.close();
-
-    initOutputFile(&sd, &file);
+	}
+	else if(!metadata_file.open(METADATA_FILENAME, O_READ)){
+		fatalError("No metadata file", 2, file);
+	}	
+	else{
+		for(int i=0; i != 3; ++i){
+			device_id += (char) metadata_file.read();
+		}
+		metadata_file.close();
+	}
+	if(sd_ok){
+		initOutputFile(&sd, &file);
+	}
     initTime(&RTC, &soft_rtc);
     log(generateHeader(RTC, device_id),file);
 }
