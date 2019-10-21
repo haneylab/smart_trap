@@ -1,5 +1,5 @@
 FQBN := arduino:avr:nano:cpu=atmega328
-PORT := /dev/ttyUSB0
+PORT := /dev/ttyUSB1
 SKETCH_NAME := smart_trap
 
 SUFFIX := $(subst :,.,$(FQBN))

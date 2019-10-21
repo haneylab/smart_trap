@@ -3,10 +3,15 @@
 #include <SPI.h>
 #include <SdFat.h>
 #include <SerialCommands.h>
+//#include <dht_nonblocking.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
+
 
 //#include <sdios.h>
 
-#define SKIP_FATAL 
+//#define SKIP_FATAL 
 #define BAUD_RATE 57600
 #define OVER_SAMPLING 32
 #define FS 8 // in Hz
@@ -19,6 +24,11 @@
 #define Z_SCORE_THRESHOLD 4.753424 //R> qnorm(1 - 10^(-6),0,1)
 #define ERROR_LED 9
 #define METADATA_FILENAME "meta.txt"
+#define COLUMNS F("t,temp_C,rel_hum,trap_1,trap_2,trap_3,trap_4")
+
+#define DHTPIN 2
+#define DHT_SAMPLING_TIME 600000 //Temp plus humidity updated every s 
+#define DHTTYPE DHT11     // DHT 11
 
 
 #define error(msg) sd.errorHalt(F(msg))
@@ -27,6 +37,8 @@
 #define FILE_BASE_NAME "st"
 
 const float time_to_sleep_us = 1e6 / (FS * OVER_SAMPLING) - RISE_TIME;
+
+uint32_t last_temp_read_t = 0;
 
 RTC_DS1307 RTC;
 RTC_Millis soft_rtc;
@@ -37,7 +49,7 @@ SdFat sd;
 SdFile file;
 SdFile metadata_file;
 String header = "#";
-String device_id = "";
+String device_id = "NA";
 bool started = false;
 
 int phototransistor_array[PHOTO_TRANSISTOR_N]= {0,1,2,3};
@@ -49,12 +61,18 @@ unsigned long real_time_ms=0; //time since boot in ms
 float drift_avg_s=0;// the drift between the arduino milli clock and the rtc
 char serial_command_buffer_[32];
 
+
+float temperature = -280;
+float humidity = -1;
+DHT_Unified dht(DHTPIN, DHTTYPE);
+
+
 //This is the default handler, and gets called when no other command matches. 
 // Note: It does not get called for one_key commands that do not match
 void cmd_unrecognized(SerialCommands* sender, const char* cmd){
-  sender->GetSerial()->print("Unrecognized command [");
+  sender->GetSerial()->print(F("Unrecognized command ["));
   sender->GetSerial()->print(cmd);
-  sender->GetSerial()->println("]");
+  sender->GetSerial()->println(F("]"));
 }
 
 void cmd_set_datetime(SerialCommands* sender){
@@ -64,25 +82,27 @@ void cmd_set_datetime(SerialCommands* sender){
     sprintf (datetime_old, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
 
 	if (datetime == NULL){
-		sender->GetSerial()->println("#ERROR NO_DATETIME!");
+		sender->GetSerial()->println(F("#ERROR NO_DATETIME!"));
 		return;
 	}	
-// 	adjustClock("1571052604");
 	adjustClock(datetime);
     now = RTC.now();
     char datetime_new[17];
     sprintf (datetime_new, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
 
 
-	String message = "#* Old time:" + String(datetime_old);
-    message += " | New time:" + String(datetime_new);
+	String message = F("#* Old time:");
+	message += String(datetime_old);
+    message += F(" | New time:") ;
+    message += String(datetime_new);
 	sender->GetSerial()->println(message);
 
 }
 
 void cmd_get_info(SerialCommands* sender){
-	String message = "#*";
-	message += "header: " + header + "|";
+	String message = F("#*");
+	message += F("header: ");
+	message += header + "|";
 	sender->GetSerial()->println(message);
 		
 }
@@ -133,11 +153,11 @@ void initOutputFile(SdFat *sd, SdFile *file){
           fileName[BASE_NAME_SIZE + 1] = '0';
           fileName[BASE_NAME_SIZE]++;
         } else {
-          fatalError("Cannot create filename", 3, *file);
+          fatalError(F("Cannot create filename"), 3, *file);
         }
       }
   if (!file->open(fileName, O_WRONLY | O_CREAT | O_EXCL)) {
-     fatalError("Cannot open file", 3, *file);
+     fatalError(F("Cannot open file"), 3, *file);
   }
 }
 
@@ -145,11 +165,22 @@ void initTime(RTC_DS1307 *RTC, RTC_Millis *soft_rtc){
     
     Wire.begin();
     if (!RTC->begin()) {
-      fatalError("No clock", 4, file);
+      fatalError(F("No clock"), 4, file);
     }
     
-    //~ RTC->isrunning()
-    // todo if year >2050 fail!
+    DateTime compilation_date(__DATE__, __TIME__);    
+    DateTime  now = RTC->now();
+		    
+	
+	uint32_t now_ut = now.unixtime();
+    uint32_t compilation_date_ut = compilation_date.unixtime();
+    if(now_ut < compilation_date_ut && compilation_date_ut -  now_ut > 84200L){
+		fatalError(F("Clock set before compilation time"), 4, file);
+		}
+    
+	if(now_ut > compilation_date_ut &&  now_ut - compilation_date_ut > 157680000L){
+		fatalError(F("Clock set 5 years past compilation time"), 4, file);
+		}		
     soft_rtc->begin(RTC->now());
 }
 
@@ -165,9 +196,13 @@ String generateHeader(RTC_DS1307 rtc, String device_id){
 }
 
 // Log a data record.
-String generateLogString(uint32_t t, float x[]){
+String generateLogString(uint32_t t, float temperature, float humidity, float x[]){
   String out = "";
   out += t;
+  out += ',';
+  out += temperature;
+  out += ',';
+  out += humidity;
   out += ',';
   
   for(int j =0; j < PHOTO_TRANSISTOR_N ; j++){
@@ -175,12 +210,13 @@ String generateLogString(uint32_t t, float x[]){
     out += ',';    
    }
    return out;
+   
   }
 
 //Write a string to both to file and Serial
 void log(String string, SdFile f){
     logSerial(string);
-    logSD(string, file);
+   logSD(string, file);
 }
 
 void logSD(String string, SdFile f){
@@ -188,7 +224,7 @@ void logSD(String string, SdFile f){
   // Force data to SD and update the directory entry to avoid data loss.
 
   if (file.isOpen() && (!file.sync() || file.getWriteError())) {
-    error("write error");
+    error("#Write error");
   }
 }
 
@@ -217,7 +253,6 @@ SerialCommands serial_commands_(&Serial, serial_command_buffer_, sizeof(serial_c
 SerialCommand cmd_set_datetime_("sdt", cmd_set_datetime);
 SerialCommand cmd_get_info_("gi", cmd_get_info);
 
-
 void setup(void) {
     Serial.begin(BAUD_RATE);
     pinMode(POWER_PIN, OUTPUT);
@@ -235,12 +270,13 @@ void setup(void) {
   // not over 50 MHz. Try a lower speed if SPI errors occur.
 	bool sd_ok = sd.begin(chipSelect, SD_SCK_MHZ(50));
 	if (!sd_ok) {
-       fatalError("Cannot connect to sd card reader", 1, file);
+       fatalError(F("Cannot connect to sd card reader"), 1, file);
 	}
 	else if(!metadata_file.open(METADATA_FILENAME, O_READ)){
-		fatalError("No metadata file", 2, file);
+		fatalError(F("No metadata file"), 2, file);
 	}	
 	else{
+		device_id = "";
 		for(int i=0; i != 3; ++i){
 			device_id += (char) metadata_file.read();
 		}
@@ -250,23 +286,39 @@ void setup(void) {
 		initOutputFile(&sd, &file);
 	}
     initTime(&RTC, &soft_rtc);
+    // todo check if can probe temp. otherwise, error 5
+	dht.begin();	
+	sensor_t sensor;
+	dht.temperature().getSensor(&sensor);
+	dht.humidity().getSensor(&sensor);
     log(generateHeader(RTC, device_id),file);
+    log(COLUMNS,file);
 }
 
 
+void updateTemperatureHumidity(uint32_t time){
+	if(time - last_temp_read_t > DHT_SAMPLING_TIME | last_temp_read_t == 0){
+		sensors_event_t event;
+		dht.temperature().getEvent(&event);
+		temperature = event.temperature;
+		dht.humidity().getEvent(&event);
+		humidity = event.relative_humidity;
+		last_temp_read_t = time;
+	}
+	
+	}
+	
 void loop(void) {
 
 	serial_commands_.ReadSerial();
 	
-    float accum[PHOTO_TRANSISTOR_N];
-    for(int j =0; j < PHOTO_TRANSISTOR_N ; j++){
-      accum[j] = 0;
-    }
+    float accum[PHOTO_TRANSISTOR_N] = {0};
+    
+    
     for(int i =0; i < OVER_SAMPLING; i++){
         digitalWrite(POWER_PIN, HIGH);
         delayMicroseconds(RISE_TIME);
-        for(int j =0; j < PHOTO_TRANSISTOR_N ; j++){
-          //Serial.println(phototransistor_array[j]);
+        for(int j =0; j < PHOTO_TRANSISTOR_N ; j++){;
           accum[j] +=  analogRead(phototransistor_array[j]);
         }
         digitalWrite(POWER_PIN, LOW);
@@ -278,9 +330,14 @@ void loop(void) {
     for(int j =0; j < PHOTO_TRANSISTOR_N ; j++){
       accum[j] /= OVER_SAMPLING;
      }
+      
     uint32_t now = realTimeMs();
-    log(generateLogString(now, accum), file);
-
+    
+	updateTemperatureHumidity(now);
+    log(generateLogString(now, temperature, humidity, accum), file);
+	//Serial.println(millis());
+	//delay(500);
+    
 /*
     float delt_accum = accum -former_accum;
     rolling_mean = rolling_mean * (1.0 -LEARNING_RATE) + LEARNING_RATE *delt_accum;
