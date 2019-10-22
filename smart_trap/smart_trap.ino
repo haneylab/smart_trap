@@ -12,6 +12,7 @@
 //#include <sdios.h>
 
 //#define SKIP_FATAL 
+#define ERROR_MESSAGE_PREFIX F("#!")
 #define BAUD_RATE 57600
 #define OVER_SAMPLING 32
 #define FS 8 // in Hz
@@ -51,6 +52,7 @@ SdFile metadata_file;
 String header = "#";
 String device_id = "NA";
 bool started = false;
+bool clock_adjusted = false;
 
 int phototransistor_array[PHOTO_TRANSISTOR_N]= {0,1,2,3};
 /*float rolling_mean[PHOTO_TRANSISTOR_N];
@@ -62,8 +64,8 @@ float drift_avg_s=0;// the drift between the arduino milli clock and the rtc
 char serial_command_buffer_[32];
 
 
-float temperature = -280;
-float humidity = -1;
+float temperature = 0.0/0.0; // NaN
+float humidity = 0.0/0.0;
 DHT_Unified dht(DHTPIN, DHTTYPE);
 
 
@@ -80,6 +82,8 @@ void cmd_set_datetime(SerialCommands* sender){
 	DateTime now = RTC.now();
     char datetime_old[17];
     sprintf (datetime_old, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
+	sender->GetSerial()->print( F("# Old time: "));
+	sender->GetSerial()->println(datetime_old);
 
 	if (datetime == NULL){
 		sender->GetSerial()->println(F("#ERROR NO_DATETIME!"));
@@ -90,13 +94,9 @@ void cmd_set_datetime(SerialCommands* sender){
     char datetime_new[17];
     sprintf (datetime_new, "%04d%02d%02d %02d:%02d:%02d",now.year(),now.month(),now.day(), now.hour(), now.minute(), now.second());
 
-
-	String message = F("#* Old time:");
-	message += String(datetime_old);
-    message += F(" | New time:") ;
-    message += String(datetime_new);
-	sender->GetSerial()->println(message);
-
+	sender->GetSerial()->print( F("# New time: "));
+	sender->GetSerial()->println(datetime_new);
+			
 }
 
 void cmd_get_info(SerialCommands* sender){
@@ -132,6 +132,7 @@ void adjustClock(char* datetime){
 	//info();
 	uint32_t unixtime = 946684800 + (uint32_t) atol(datetime);
 	RTC.adjust(DateTime(unixtime));
+	clock_adjusted = true;
 	delay(500);
 	//info();
   }
@@ -171,16 +172,16 @@ void initTime(RTC_DS1307 *RTC, RTC_Millis *soft_rtc){
     DateTime compilation_date(__DATE__, __TIME__);    
     DateTime  now = RTC->now();
 		    
-	
 	uint32_t now_ut = now.unixtime();
     uint32_t compilation_date_ut = compilation_date.unixtime();
+    // one day in tyhe past to account for time zones
     if(now_ut < compilation_date_ut && compilation_date_ut -  now_ut > 84200L){
 		fatalError(F("Clock set before compilation time"), 4, file);
 		}
     
 	if(now_ut > compilation_date_ut &&  now_ut - compilation_date_ut > 157680000L){
 		fatalError(F("Clock set 5 years past compilation time"), 4, file);
-		}		
+		}
     soft_rtc->begin(RTC->now());
 }
 
@@ -192,6 +193,8 @@ String generateHeader(RTC_DS1307 rtc, String device_id){
     header += datetime;
     header += ",";
     header += device_id;
+    header += ",";
+    header += clock_adjusted;
     return header;
 }
 
@@ -233,7 +236,9 @@ void logSerial(String string){
 }
 
 void fatalError(String message, char status, SdFile file){
-    log(message, file);
+	String m = ERROR_MESSAGE_PREFIX;
+	m += message;
+    log(m, file);
     unsigned int i = 0;
     while(true){
         if(i %10 < status){
@@ -249,9 +254,33 @@ void fatalError(String message, char status, SdFile file){
     }
 }
 
+
+
+bool updateTemperatureHumidity(uint32_t time, bool force=false){
+	if(time - last_temp_read_t > DHT_SAMPLING_TIME || force){
+		sensors_event_t event;
+		dht.temperature().getEvent(&event);
+		
+		if (isnan(event.temperature)){
+			return false;
+		}
+		temperature = event.temperature;
+		
+		dht.humidity().getEvent(&event);
+		if (isnan(event.relative_humidity)){
+			return false;
+		}
+			
+		humidity = event.relative_humidity;
+		last_temp_read_t = time;
+	}
+	return true;
+}
+
 SerialCommands serial_commands_(&Serial, serial_command_buffer_, sizeof(serial_command_buffer_), "\r\n", " ");
 SerialCommand cmd_set_datetime_("sdt", cmd_set_datetime);
 SerialCommand cmd_get_info_("gi", cmd_get_info);
+
 
 void setup(void) {
     Serial.begin(BAUD_RATE);
@@ -286,32 +315,28 @@ void setup(void) {
 		initOutputFile(&sd, &file);
 	}
     initTime(&RTC, &soft_rtc);
+ 
     // todo check if can probe temp. otherwise, error 5
 	dht.begin();	
 	sensor_t sensor;
 	dht.temperature().getSensor(&sensor);
 	dht.humidity().getSensor(&sensor);
+	
+	if(!updateTemperatureHumidity(realTimeMs(), true)){
+		fatalError(F("Fail to read DHT11"), 5, file);
+	}
+	while(!clock_adjusted && realTimeMs() < 10000L ){
+		delay(50);
+		serial_commands_.ReadSerial();
+	}	
+	
     log(generateHeader(RTC, device_id),file);
     log(COLUMNS,file);
 }
 
-
-void updateTemperatureHumidity(uint32_t time){
-	if(time - last_temp_read_t > DHT_SAMPLING_TIME | last_temp_read_t == 0){
-		sensors_event_t event;
-		dht.temperature().getEvent(&event);
-		temperature = event.temperature;
-		dht.humidity().getEvent(&event);
-		humidity = event.relative_humidity;
-		last_temp_read_t = time;
-	}
-	
-	}
 	
 void loop(void) {
-
 	serial_commands_.ReadSerial();
-	
     float accum[PHOTO_TRANSISTOR_N] = {0};
     
     

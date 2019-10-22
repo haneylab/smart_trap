@@ -209,9 +209,14 @@ if __name__ == "__main__":
             # Infinite loop
             while True:
                 # we read a line from serial port and remove any `\r` and `\n` character
-                line = serial_port.readline().rstrip()
-                # if line.startswith(b"#"):
-                # print(line)
+                line = serial_port.readline()
+                if not line:
+                    continue
+                line = line.rstrip()
+                if line.startswith(b"#") or line.startswith(b"t"):
+                    print(line)
+                    continue
+
                 # continue
             # Just after, we get a time stamp
                 #now = time.time()
@@ -219,8 +224,10 @@ if __name__ == "__main__":
                 try:
                     values = [float(v) for v in line.split(b',') if v]
                    # value = float(line)
-
+                    print(values)
                     now = float(values.pop(0)) / 1e3
+                    temperature = float(values.pop(0))
+                    rel_humidity = float(values.pop(0))
                 # If something goes wrong, we do not stop, but we print the error message
                 except ValueError as e:
                     print(e)
@@ -239,10 +246,10 @@ if __name__ == "__main__":
                 value_queue.append(values)
 
                 # We wait to have at least five points AND three seconds of data
-                print((now, values))
+               # print((now, values))
                 if time_queue[-1] < 3 or len(time_queue) < 5:
                     continue
-                print((now, values))
+
                 # Now, we remove/forget from the queues any value older than the window size
                 # This way. we will only plot the last n (default 20) seconds of data
                 while time_queue[-1] - time_queue[0] > window_size:
